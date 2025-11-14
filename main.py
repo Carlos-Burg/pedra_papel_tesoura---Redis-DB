@@ -7,7 +7,7 @@ import json
 def conectar_redis():  # conecta no banco
     print("Conectando ao banco...\n")
     return redis.Redis(
-        host='10.1.69.134',
+        host='localhost',
         port=6379,
         db=0
     )
@@ -21,11 +21,10 @@ def cria_sala(nome_sala):  # valida se a sala existe
         return False
 
     # Cria a sala
-    r.hset(chave_sala, mapping={
-        "nome": nome_sala,
-        "jogador1": "",
-        "jogador2": ""
-    })
+    r.hset(chave_sala, "nome", nome_sala)
+    r.hset(chave_sala, "jogador1", "")
+    r.hset(chave_sala, "jogador2", "")
+
 
     print(f"Sala '{nome_sala}' criada com sucesso.")
     return True
