@@ -151,6 +151,15 @@ def finalizar_jogo(nome_sala):
     else:
         print("🤝 EMPATE!")
 
+def excluir_sala(nome_sala):
+    r = conectar_redis()
+
+    padrao = f"sala:{nome_sala}*"
+    chaves = r.keys(padrao)
+
+    r.delete(*chaves)
+    print(f"\nSala '{nome_sala}' excluída com sucesso.")
+
 def front(state: int, user_credits, user_j=0, machine_j=0):
     choi = ["👊", "🖐", "✌", "??"]
     if user_j != 0:
@@ -242,7 +251,6 @@ if __name__ == '__main__':
                 break
             else:
                 print("\n❌ A sala não existe! Tente novamente.\n")
-
         else:
             print("\nOpção inválida. Tente novamente.\n")
 
@@ -308,3 +316,4 @@ if __name__ == '__main__':
             
     # Finaliza e limpa sala (apenas jogador 1 pode excluir)
     finalizar_jogo(nome_sala)
+    excluir_sala(nome_sala)
