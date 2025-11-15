@@ -5,7 +5,7 @@ import redis
 import json
 
 def conectar_redis():  # conecta no banco
-    print("Conectando ao banco...\n")
+    # Retire o print em produção se quiser
     return redis.Redis(
         host='localhost',
         port=6379,
@@ -24,7 +24,6 @@ def cria_sala(nome_sala):  # valida se a sala existe
     r.hset(chave_sala, "nome", nome_sala)
     r.hset(chave_sala, "jogador1", "")
     r.hset(chave_sala, "jogador2", "")
-
 
     print(f"Sala '{nome_sala}' criada com sucesso.")
     return True
@@ -48,8 +47,11 @@ def criar_jogadores(nome_sala, jogador_id):
         print("A sala não existe!")
         return False
 
-    j1 = r.hget(chave_sala, "jogador1").decode()
-    j2 = r.hget(chave_sala, "jogador2").decode()
+    # ler com segurança
+    raw_j1 = r.hget(chave_sala, "jogador1")
+    raw_j2 = r.hget(chave_sala, "jogador2")
+    j1 = raw_j1.decode() if raw_j1 else ""
+    j2 = raw_j2.decode() if raw_j2 else ""
 
     if j1 == "":
         r.hset(chave_sala, "jogador1", jogador_id)
@@ -65,21 +67,58 @@ def criar_jogadores(nome_sala, jogador_id):
         print("A sala já está cheia (2 jogadores).")
         return False
 
+def registrar_jogada_individual(nome_sala, jogador_num, jogada):
+    """Registra apenas a jogada do jogador (chave única por jogador)."""
+    r = conectar_redis()
+    chave = f"sala:{nome_sala}:jogada_j{jogador_num}"
+    # Salva como string (int também funciona), sem expiração
+    r.set(chave, int(jogada))
+
+def esperar_jogada_oponente(nome_sala, jogador_num): 
+    """Bloqueia até que a chave do adversário exista e retorne o valor."""
+    r = conectar_redis()
+    outro = 2 if jogador_num == 1 else 1
+    chave_oponente = f"sala:{nome_sala}:jogada_j{outro}"
+
+    print("Aguardando o outro jogador jogar...")
+
+    while True:
+        jogada = r.get(chave_oponente)
+        if jogada:
+            try:
+                return int(jogada)
+            except ValueError:
+                # se por algum motivo não for int, tenta converter
+                return int(jogada.decode() if isinstance(jogada, bytes) else jogada)
+        time.sleep(0.3)
+
 def registrar_jogada(nome_sala, jogada_j1, jogada_j2):
+    """Registra no histórico (lista) a rodada completa."""
     r = conectar_redis()
     chave_jogadas = f"sala:{nome_sala}:jogadas"
 
     rodada = json.dumps({
-        "j1": jogada_j1,
-        "j2": jogada_j2
+        "j1": int(jogada_j1),
+        "j2": int(jogada_j2)
     })
 
     r.rpush(chave_jogadas, rodada)
+
+def limpar_jogadas(nome_sala):
+    """Limpa as chaves de jogada para a próxima rodada."""
+    r = conectar_redis()
+    r.delete(f"sala:{nome_sala}:jogada_j1")
+    r.delete(f"sala:{nome_sala}:jogada_j2")
 
 def finalizar_jogo(nome_sala):
     r = conectar_redis()
     chave_jogadas = f"sala:{nome_sala}:jogadas"
     jogadas_brutas = r.lrange(chave_jogadas, 0, -1)
+
+    # se não houver jogadas, mostra mensagem
+    if not jogadas_brutas:
+        print("\nNenhuma rodada registrada.")
+        return
 
     jogadas = [json.loads(j) for j in jogadas_brutas]
 
@@ -112,39 +151,17 @@ def finalizar_jogo(nome_sala):
     else:
         print("🤝 EMPATE!")
 
-def exclui_sala(nome_sala, jogador_id):
-    r = conectar_redis()
-    chave_sala = f"sala:{nome_sala}"
-    chave_jogadas = f"{chave_sala}:jogadas"
-
-    # Se sala não existe
-    if not r.exists(chave_sala):
-        print("A sala não existe mais.")
-        return False
-
-    # Pegando o jogador1 salvo no Redis
-    jogador1 = r.hget(chave_sala, "jogador1")
-    jogador1 = jogador1.decode() if jogador1 else ""
-
-    # Verificando permissão
-    if jogador_id != jogador1:
-        print("❌ Apenas o Jogador 1 pode excluir a sala.")
-        return False
-
-    # Jogador 1 pode excluir
-    r.delete(chave_sala)
-    r.delete(chave_jogadas)
-
-    print(f"✅ Sala '{nome_sala}' excluída pelo Jogador 1.")
-    return True
-
 def front(state: int, user_credits, user_j=0, machine_j=0):
     choi = ["👊", "🖐", "✌", "??"]
     if user_j != 0:
         user_j = choi[user_j - 1]
     if machine_j != 0:
         machine_j = choi[machine_j - 1]
-    os.system("cls")
+    # limpa tela (Windows usa cls, outros usam clear)
+    try:
+        os.system("cls")
+    except:
+        os.system("clear")
     print("+-------------------------------+")
     print(f"+user_credits:{user_credits}\t\t\t+")
     print("+-------------------------------+")
@@ -168,13 +185,12 @@ def front(state: int, user_credits, user_j=0, machine_j=0):
     print("+       / || \\     / || \\       +")
     print("+_______c_|_|_'___c_|_|_'_______+")
 
-
 def ui(typee: int = 1, user_credits=0):
     if typee == 1:
         while True:
             try:
                 select = int(input("1) 👊\n2) 🖐\n3) ✌\nDigite sua jogada: "))
-                if select > 0 and select < 4:
+                if 1 <= select <= 3:
                     return user_credits, select
             except:
                 pass
@@ -184,6 +200,7 @@ def ui(typee: int = 1, user_credits=0):
         return user_credits + 1, None
 
 def anime(user_credits, user_j, machine_j):
+    # Animação simplificada: mostra jogadas e decide vencedor localmente
     front(state=0, user_credits=user_credits)
     for ii in range(1, 4):
         front(state=0, user_credits=user_credits, user_j=user_j, machine_j=ii)
@@ -192,58 +209,102 @@ def anime(user_credits, user_j, machine_j):
         front(state=0, user_credits=user_credits, user_j=user_j, machine_j=ii)
         time.sleep(0.5)
     front(state=1, user_credits=user_credits, user_j=user_j, machine_j=machine_j)
-    time.sleep(3)
+    time.sleep(1.2)
     if user_j == machine_j:
+        print("\nEmpate!")
         return 0
     else:
-        if (user_j == 1 and machine_j == 2) or (user_j == 2 and machine_j == 3) or (user_j == 3 and machine_j == 1):
-            front(state=3, user_credits=user_credits)
-            time.sleep(3)
-            return -1
-        else:
-            front(state=2, user_credits=user_credits)
-            time.sleep(3)
+        # condição de vitória do usuário (1 vence 3, 2 vence 1, 3 vence 2)
+        if (user_j == 1 and machine_j == 3) or (user_j == 2 and machine_j == 1) or (user_j == 3 and machine_j == 2):
+            print("\nVocê venceu esta rodada!")
             return 1
+        else:
+            print("\nVocê perdeu esta rodada!")
+            return -1
 
 if __name__ == '__main__':
 
-    print("\nDeseja criar ou se conectar a uma sala ?")
-    resp = input("1 - CRIAR | 2 - CONECTAR: ")
+    # LOOP PARA CRIAR / CONECTAR A SALA CORRETAMENTE
+    while True:
+        print("\nDeseja criar ou se conectar a uma sala ?")
+        resp = input("1 - CRIAR | 2 - CONECTAR: ").strip()
 
-    nome_sala = input("Digite o nome da sala: ")
+        nome_sala = input("Digite o nome da sala: ").strip()
 
-    if resp == "1":
-        cria_sala(nome_sala)
-    else:
-        conectar_sala(nome_sala)
+        if resp == "1":
+            if cria_sala(nome_sala):
+                break
+            else:
+                print("\n❌ A sala já existe! Tente novamente.\n")
 
-    jogador_id = input("Digite seu nome/jogador: ")
-    posicao = criar_jogadores(nome_sala, jogador_id)
+        elif resp == "2":
+            if conectar_sala(nome_sala):
+                break
+            else:
+                print("\n❌ A sala não existe! Tente novamente.\n")
+
+        else:
+            print("\nOpção inválida. Tente novamente.\n")
+
+    # Definindo jogador (loop até conseguir entrar)
+    while True:
+        jogador_id = input("Digite seu nome/jogador: ").strip()
+        posicao = criar_jogadores(nome_sala, jogador_id)
+        if posicao:
+            break
+        else:
+            print("Não foi possível entrar na sala. Tente outro nome ou sala.\n")
 
     print(f"Você é o jogador {posicao}")
 
+    # Limpa jogadas antigas de rodadas passadas (safety)
+    r = conectar_redis()
+    r.delete(f"sala:{nome_sala}:jogada_j1")
+    r.delete(f"sala:{nome_sala}:jogada_j2")
+
     # Aqui jogam até acabar créditos
     user_credits = 0
-    cw = 0
-    cl = 0
 
     while True:
         front(state=0, user_credits=user_credits)
 
         if user_credits > 0:
-            user_credits, jogada_j1 = ui(1, user_credits)
-            jogada_j2 = randint(1, 3)
+            # --- MULTIPLAYER FLOW ---
+            # Jogador faz sua jogada
+            user_credits, minha_jogada = ui(1, user_credits)
 
-            registrar_jogada(nome_sala, jogada_j1, jogada_j2)
+            # Registra apenas a sua jogada no Redis
+            registrar_jogada_individual(nome_sala, posicao, minha_jogada)
 
-            resul = anime(user_credits=user_credits, user_j=jogada_j1, machine_j=jogada_j2)
-            user_credits += resul
+            # Espera a jogada do oponente (bloqueante)
+            jogada_oponente = esperar_jogada_oponente(nome_sala, posicao)
+
+            # Ordena j1/j2 para salvar histórico corretamente
+            if posicao == 1:
+                j1 = minha_jogada
+                j2 = jogada_oponente
+            else:
+                j1 = jogada_oponente
+                j2 = minha_jogada
+
+            # Registra a rodada no histórico (lista)
+            registrar_jogada(nome_sala, j1, j2)
+
+            # Executa animação/resultado localmente
+            resultado = anime(user_credits=user_credits, user_j=minha_jogada, machine_j=jogada_oponente)
+            user_credits += resultado
+
+            # Limpa chaves de jogada para próxima rodada
+            limpar_jogadas(nome_sala)
 
         else:
+            # Comprar crédito (ou ganhar de outra forma)
             user_credits, _ = ui(2, user_credits)
 
-        if user_credits >= 5:  # regra de fim
+        # Condição de término
+        if user_credits >= 5:
+            print("\n💰 Você atingiu o máximo de créditos! Fim da partida.\n")
             break
-
+            
+    # Finaliza e limpa sala (apenas jogador 1 pode excluir)
     finalizar_jogo(nome_sala)
-    exclui_sala(nome_sala, jogador_id)
